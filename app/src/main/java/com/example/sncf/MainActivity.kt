@@ -2,7 +2,7 @@ package com.example.sncf
 
 import android.app.DatePickerDialog
 import android.os.Bundle
-import android.telecom.Call
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
@@ -36,12 +36,17 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.journeys.Journeys
 import com.example.sncf.ui.theme.SNCFTheme
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
 import retrofit2.http.Header
-import retrofit2.http.Query
+import retrofit2.http.Url
 import java.util.Calendar
 
 data class Infos(
@@ -295,26 +300,6 @@ fun SelectDepart(
     }
 }
 
-data class Train(
-    val trainNumber: String,
-    val departureTime: String,
-    val arrivalTime: String
-)
-
-data class Trains(
-    val trains: List<Train>
-)
-
-interface SNCFService {
-    @GET("journeys")
-    fun getTrains(
-        @Header("Authorization") authorization: String,
-        @Query("datetime") date: String,
-        @Query("from") depart: String,
-        @Query("to") destination: String
-    ): Call<Trains>
-}
-
 @Composable
 fun SelectTrain(
     onInfosSelected: (String) -> Unit,
@@ -322,38 +307,83 @@ fun SelectTrain(
 ) {
     //appel API SNCF
     // 80ebf15b-8c29-4391-86f3-b936b4f1da22
-    //Accédez à l'API : https://api.sncf.com/v1
+    //Exemple trouver les trajets Paris - Lyon du 23/12/2023 : https://api.sncf.com/v1/coverage/sncf/journeys?from=stop_area:SNCF:87686006&to=stop_area:SNCF:87722025&datetime=20231223T140151
 
-    val date = informations.date
-    val depart = informations.depart
-    val destination = informations.destination
-    val apiKey = "80ebf15b-8c29-4391-86f3-b936b4f1da22"
+    val tokenAuth = "80ebf15b-8c29-4391-86f3-b936b4f1da22"
 
-    Text(text = "Vos infos :")
-    Spacer(modifier = Modifier.size(16.dp))
-    Text(text = date)
-    Spacer(modifier = Modifier.size(16.dp))
-    Text(text = depart)
-    Spacer(modifier = Modifier.size(16.dp))
-    Text(text= destination)
+    //afficher l'exemple :
 
     val retrofit = Retrofit.Builder()
-        .baseUrl("https://api.sncf.com/v1/coverage/sncf/")
+        .baseUrl("https://api.sncf.com/v1/")
         .addConverterFactory(GsonConverterFactory.create())
         .build()
 
-    val service = retrofit.create(SNCFService::class.java)
-    val response = service.getTrains("Bearer $apiKey", date, "admin:$depart", "admin:$destination")
+    val apiService = retrofit.create(SNCFService::class.java)
 
-    
+    // Exemple de trajets Paris - Lyon du 23/12/2023
+    val gareDepart = "stop_area:SNCF:87686006"
+    val gareArrivee = "stop_area:SNCF:87722025"
+    val dateDepart = "20231223T100000"
 
-    // Afficher la réponse dans un Text
-    if (trainState.value != null) {
-        Text(text = trainState.value.toString(), fontSize = 36.sp)
-    } else {
-        // Afficher un indicateur de chargement ou un message d'erreur si nécessaire
-        Text(text = "Chargement en cours...", fontSize = 36.sp)
+    var departureTimes by remember { mutableStateOf<List<String>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+
+    fun fetchJourneys(url: String) {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val response = apiService.getJourneys(url, tokenAuth)
+                if (response.isSuccessful && response.body() != null) {
+                    val journeys = response.body()?.journeys.orEmpty()
+                    val sectionDepartures = journeys.flatMap { it.sections.map { section -> section.departureDateTime } }
+                    departureTimes = sectionDepartures
+
+                    // Vérifiez s'il y a un lien pour la prochaine page de journeys
+                    val nextLink = response.body()?.links?.find { it.rel == "next" }?.href
+                    if (!nextLink.isNullOrBlank()) {
+                        //exemple : https://api.sncf.com/v1/coverage/sncf/journeys?from=stop_area%3ASNCF%3A87686006&to=stop_area%3ASNCF%3A87722025&datetime=20231223T070001&datetime_represents=departure
+                        //si la date du prochain lien est 1 jour après la date de départ alors on arrête la récursivité
+                        Log.d("NextLink", "Next link: $nextLink")
+                        Log.d("NextLink", "Next link: ${nextLink.substring(120, 128)}")
+                        if (nextLink.substring(120, 128) == "20231224") {
+                            return@launch
+                        }
+                        fetchJourneys(nextLink)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("Error", "Erreur: ${e.message}")
+                onInfosSelected("Erreur: ${e.message}")
+            }
+        }
     }
+
+// Appel initial avec l'URL de départ
+    LaunchedEffect(key1 = Unit) {
+        val initialUrl = "https://api.sncf.com/v1/coverage/sncf/journeys?from=stop_area%3ASNCF%3A87686006&to=stop_area%3ASNCF%3A87722025&datetime=20231223T140151"
+        fetchJourneys(initialUrl)
+        isLoading = false
+    }
+
+
+    Column {
+        Text(text = "Trajets disponibles :", fontSize = 36.sp)
+        Spacer(modifier = Modifier.size(16.dp))
+        if (isLoading) {
+            if (departureTimes.isNotEmpty()) {
+                
+            } else {
+                Text(text = "Aucun trajet disponible", fontSize = 36.sp)
+            }
+        }
+    }
+}
+
+interface SNCFService {
+    @GET
+    suspend fun getJourneys(
+        @Url url: String,
+        @Header("Authorization") token: String
+    ): Response<Journeys>
 }
 
 @Preview(showBackground = true)
