@@ -1,5 +1,6 @@
 package com.example.sncf
 
+import Main
 import android.app.DatePickerDialog
 import android.os.Bundle
 import android.util.Log
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -36,12 +38,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.journeys.Journeys
 import com.example.sncf.ui.theme.SNCFTheme
+import com.google.gson.GsonBuilder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.GET
@@ -313,9 +314,10 @@ fun SelectTrain(
 
     //afficher l'exemple :
 
+    val gson = GsonBuilder().setLenient().create()
     val retrofit = Retrofit.Builder()
         .baseUrl("https://api.sncf.com/v1/")
-        .addConverterFactory(GsonConverterFactory.create())
+        .addConverterFactory(GsonConverterFactory.create(gson))
         .build()
 
     val apiService = retrofit.create(SNCFService::class.java)
@@ -332,23 +334,26 @@ fun SelectTrain(
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val response = apiService.getJourneys(url, tokenAuth)
-                if (response.isSuccessful && response.body() != null) {
-                    val journeys = response.body()?.journeys.orEmpty()
-                    val sectionDepartures = journeys.flatMap { it.sections.map { section -> section.departureDateTime } }
-                    departureTimes = sectionDepartures
-
-                    // Vérifiez s'il y a un lien pour la prochaine page de journeys
-                    val nextLink = response.body()?.links?.find { it.rel == "next" }?.href
-                    if (!nextLink.isNullOrBlank()) {
-                        //exemple : https://api.sncf.com/v1/coverage/sncf/journeys?from=stop_area%3ASNCF%3A87686006&to=stop_area%3ASNCF%3A87722025&datetime=20231223T070001&datetime_represents=departure
-                        //si la date du prochain lien est 1 jour après la date de départ alors on arrête la récursivité
-                        Log.d("NextLink", "Next link: $nextLink")
-                        Log.d("NextLink", "Next link: ${nextLink.substring(120, 128)}")
-                        if (nextLink.substring(120, 128) == "20231224") {
-                            return@launch
+                val journeys = response.journeys
+                val publicTransportSections = journeys.flatMap { journey ->
+                    for (section in journey.sections) {
+                        if (section.type == "public_transport") {
+                            return@flatMap listOf(section)
                         }
-                        fetchJourneys(nextLink)
                     }
+                    return@flatMap emptyList()
+                }
+
+                val sectionDepartures = publicTransportSections.mapNotNull { it.departure_date_time }
+                departureTimes = departureTimes + sectionDepartures
+
+                // Vérifiez s'il y a un lien pour la prochaine page de journeys
+                val nextLink = response.links?.find { it.rel == "next" }?.href
+                if (!nextLink.isNullOrBlank()) {
+                    if (nextLink.substring(120, 128) == "20231224") {
+                        return@launch
+                    }
+                    fetchJourneys(nextLink)
                 }
             } catch (e: Exception) {
                 Log.e("Error", "Erreur: ${e.message}")
@@ -356,26 +361,48 @@ fun SelectTrain(
             }
         }
     }
-
+    Log.d("DepartureTimes", departureTimes.toString())
 // Appel initial avec l'URL de départ
     LaunchedEffect(key1 = Unit) {
-        val initialUrl = "https://api.sncf.com/v1/coverage/sncf/journeys?from=stop_area%3ASNCF%3A87686006&to=stop_area%3ASNCF%3A87722025&datetime=20231223T140151"
+        val initialUrl = "https://api.sncf.com/v1/coverage/sncf/journeys?from=stop_area%3ASNCF%3A87686006&to=stop_area%3ASNCF%3A87722025&datetime=20231223T100000"
         fetchJourneys(initialUrl)
         isLoading = false
     }
 
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        item {
+            Text(text = "Trajets disponibles :", fontSize = 36.sp)
+            Spacer(modifier = Modifier.size(16.dp))
+        }
 
-    Column {
-        Text(text = "Trajets disponibles :", fontSize = 36.sp)
-        Spacer(modifier = Modifier.size(16.dp))
         if (isLoading) {
-            if (departureTimes.isNotEmpty()) {
-                
-            } else {
-                Text(text = "Aucun trajet disponible", fontSize = 36.sp)
+            item {
+                Text(text = "Chargement...", fontSize = 36.sp)
+            }
+        } else {
+            items(departureTimes.size) { index ->
+                //parser index 20231223T100000 -> 10h00
+                val hour = departureTimes[index].substring(9, 11)
+                val minute = departureTimes[index].substring(11, 13)
+
+                Text(text = "Départ : $hour:$minute", fontSize = 36.sp)
+                Spacer(modifier = Modifier.size(16.dp))
+            }
+
+            if (departureTimes.isEmpty()) {
+                item {
+                    Text(text = "Aucun trajet disponible", fontSize = 36.sp)
+                }
             }
         }
     }
+
 }
 
 interface SNCFService {
@@ -383,7 +410,7 @@ interface SNCFService {
     suspend fun getJourneys(
         @Url url: String,
         @Header("Authorization") token: String
-    ): Response<Journeys>
+    ): Main
 }
 
 @Preview(showBackground = true)
