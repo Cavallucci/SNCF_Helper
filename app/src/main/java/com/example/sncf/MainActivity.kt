@@ -1,6 +1,7 @@
 package com.example.sncf
 
 import Main
+import Sections
 import android.app.DatePickerDialog
 import android.os.Bundle
 import android.util.Log
@@ -55,7 +56,7 @@ data class Infos(
     var date: String,
     var depart: String,
     var destination: String,
-    var horaire: String,
+    var infosTrain: Sections,
 )
 
 class MainActivity : ComponentActivity() {
@@ -78,7 +79,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun TicketBookingApp() {
     var currentStep by remember { mutableStateOf(1) }
-    var infos by remember { mutableStateOf(Infos("", "", "", "", "")) }
+    var selectedTrain by remember { mutableStateOf<Sections?>(null) }
+    var infos by remember { mutableStateOf(Infos("", "", "", "", selectedTrain!!)) }
 
     when (currentStep) {
         1 -> Start(onNext = { currentStep = 2 })
@@ -110,10 +112,13 @@ fun TicketBookingApp() {
         )
         6 -> SelectTrain(
             onInfosSelected = { info ->
-                infos.horaire = info
+                infos.infosTrain = info
                 currentStep = 7
             },
             informations = infos
+        )
+        7 -> ResumInfos(
+            selectedTrain = infos.infosTrain
         )
     }
 }
@@ -303,31 +308,24 @@ fun SelectDepart(
 
 @Composable
 fun SelectTrain(
-    onInfosSelected: (String) -> Unit,
+    onInfosSelected: (Sections) -> Unit,
     informations: Infos,
 ) {
-    //appel API SNCF
-    // 80ebf15b-8c29-4391-86f3-b936b4f1da22
-    //Exemple trouver les trajets Paris - Lyon du 23/12/2023 : https://api.sncf.com/v1/coverage/sncf/journeys?from=stop_area:SNCF:87686006&to=stop_area:SNCF:87722025&datetime=20231223T140151
-
     val tokenAuth = "80ebf15b-8c29-4391-86f3-b936b4f1da22"
-
-    //afficher l'exemple :
 
     val gson = GsonBuilder().setLenient().create()
     val retrofit = Retrofit.Builder()
         .baseUrl("https://api.sncf.com/v1/")
         .addConverterFactory(GsonConverterFactory.create(gson))
         .build()
-
     val apiService = retrofit.create(SNCFService::class.java)
 
-    // Exemple de trajets Paris - Lyon du 23/12/2023
-    val gareDepart = "stop_area:SNCF:87686006"
-    val gareArrivee = "stop_area:SNCF:87722025"
-    val dateDepart = "20231223T100000"
+    val infos = recupInfos(informations)
+    val gareDepart = infos.depart
+    val gareArrivee = infos.destination
+    val dateDepart = infos.date
 
-    var departureTimes by remember { mutableStateOf<List<String>>(emptyList()) }
+    var departureSections by remember { mutableStateOf<List<Sections>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
 
     fun fetchJourneys(url: String) {
@@ -344,31 +342,37 @@ fun SelectTrain(
                     return@flatMap emptyList()
                 }
 
-                val sectionDepartures = publicTransportSections.mapNotNull { it.departure_date_time }
-                departureTimes = departureTimes + sectionDepartures
-
                 // Vérifiez s'il y a un lien pour la prochaine page de journeys
                 val nextLink = response.links?.find { it.rel == "next" }?.href
                 if (!nextLink.isNullOrBlank()) {
-                    if (nextLink.substring(120, 128) == "20231224") {
+                    if (nextLink.substring(120, 128) != dateDepart) {
+                        isLoading = false
                         return@launch
                     }
+                    departureSections = departureSections + publicTransportSections
                     fetchJourneys(nextLink)
                 }
             } catch (e: Exception) {
                 Log.e("Error", "Erreur: ${e.message}")
-                onInfosSelected("Erreur: ${e.message}")
+                onInfosSelected(departureSections[0])
             }
         }
     }
-    Log.d("DepartureTimes", departureTimes.toString())
 // Appel initial avec l'URL de départ
     LaunchedEffect(key1 = Unit) {
-        val initialUrl = "https://api.sncf.com/v1/coverage/sncf/journeys?from=stop_area%3ASNCF%3A87686006&to=stop_area%3ASNCF%3A87722025&datetime=20231223T100000"
+        val initialUrl = "https://api.sncf.com/v1/coverage/sncf/journeys?from=${gareDepart}&to=${gareArrivee}&datetime=${dateDepart}T100000"
         fetchJourneys(initialUrl)
-        isLoading = false
     }
 
+    var selectedTrain by remember { mutableStateOf<Sections?>(null) }
+
+    showTrains(departureSections, isLoading) { selectedTrain ->
+        onInfosSelected(selectedTrain)
+    }
+}
+
+@Composable
+fun showTrains(departureTimes: List<Sections>, isLoading: Boolean, onItemSelected: (Sections) -> Unit): Sections {
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -386,12 +390,23 @@ fun SelectTrain(
                 Text(text = "Chargement...", fontSize = 36.sp)
             }
         } else {
+            item {
+                Text(text = "Cliquer sur le trajet de votre choix", fontSize = 36.sp)
+            }
             items(departureTimes.size) { index ->
                 //parser index 20231223T100000 -> 10h00
-                val hour = departureTimes[index].substring(9, 11)
-                val minute = departureTimes[index].substring(11, 13)
+                val tmp = departureTimes[index]
+                val departHour = tmp.departure_date_time.substring(9, 11)
+                val departMinute = tmp.departure_date_time.substring(11, 13)
+                val arriveeHour = tmp.arrival_date_time.substring(9, 11)
+                val arriveeMinute = tmp.arrival_date_time.substring(11, 13)
 
-                Text(text = "Départ : $hour:$minute", fontSize = 36.sp)
+                Button(onClick = {
+                    onItemSelected(tmp)
+                }) {
+                    Text(text = "Départ : $departHour:$departMinute", fontSize = 26.sp)
+                    Text(text = "Arrivée : $arriveeHour:$arriveeMinute", fontSize = 26.sp)
+                }
                 Spacer(modifier = Modifier.size(16.dp))
             }
 
@@ -402,15 +417,68 @@ fun SelectTrain(
             }
         }
     }
-
+    return departureTimes[0]
 }
 
+fun recupInfos(informations: Infos): Infos {
+    val gareDepart = when (informations.depart) {
+        "Liverdun" -> "stop_area:SNCF:87141069"
+        "Nancy" -> "stop_area:SNCF:87141002"
+        "Paris" -> "stop_area:SNCF:87113001"
+        "Saverne" -> "stop_area:SNCF:87212225"
+        else -> "stop_area:SNCF:87113001"
+    }
+
+    val gareArrivee = when (informations.destination) {
+        "Liverdun" -> "stop_area:SNCF:87141069"
+        "Nancy" -> "stop_area:SNCF:87141002"
+        "Paris" -> "stop_area:SNCF:87113001"
+        "Saverne" -> "stop_area:SNCF:87212225"
+        else -> "stop_area:SNCF:87113001"
+    }
+
+    // Parse la date 01/01/2021 -> 20210101T100000
+    val dateDepart = informations.date
+    val day = dateDepart.substring(0, 2)
+    val month = dateDepart.substring(3, 5)
+    val year = dateDepart.substring(6, 10)
+    val date = "$year$month$day"
+
+    return informations.copy(date = date, depart = gareDepart, destination = gareArrivee)
+}
 interface SNCFService {
     @GET
     suspend fun getJourneys(
         @Url url: String,
         @Header("Authorization") token: String
     ): Main
+}
+
+@Composable
+fun ResumInfos(selectedTrain: Sections) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(text = "Résumé des informations", fontSize = 36.sp)
+        Spacer(modifier = Modifier.size(16.dp))
+        //afficher le to, from, datedepart, datearrivee
+        val departHour = selectedTrain.departure_date_time.substring(9, 11)
+        val departMinute = selectedTrain.departure_date_time.substring(11, 13)
+        val arriveeHour = selectedTrain.arrival_date_time.substring(9, 11)
+        val arriveeMinute = selectedTrain.arrival_date_time.substring(11, 13)
+        Text(text="Départ depuis ${selectedTrain.from.name} à $departHour:$departMinute", fontSize = 26.sp)
+        Text(text="Arrivée à ${selectedTrain.to.name} à $arriveeHour:$arriveeMinute", fontSize = 26.sp)
+        Spacer(modifier = Modifier.size(16.dp))
+        Button(onClick = {
+            //envoyer les infos à l'API
+        }) {
+            Text(text = "Valider", fontSize = 36.sp)
+        }
+    }
 }
 
 @Preview(showBackground = true)
