@@ -8,6 +8,7 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -56,7 +57,7 @@ data class Infos(
     var date: String,
     var depart: String,
     var destination: String,
-    var infosTrain: Sections,
+    var infosTrain: Sections?,
 )
 
 class MainActivity : ComponentActivity() {
@@ -80,7 +81,7 @@ class MainActivity : ComponentActivity() {
 fun TicketBookingApp() {
     var currentStep by remember { mutableStateOf(1) }
     var selectedTrain by remember { mutableStateOf<Sections?>(null) }
-    var infos by remember { mutableStateOf(Infos("", "", "", "", selectedTrain!!)) }
+    var infos by remember { mutableStateOf(Infos("", "", "", "", selectedTrain)) }
 
     when (currentStep) {
         1 -> Start(onNext = { currentStep = 2 })
@@ -88,38 +89,61 @@ fun TicketBookingApp() {
             onInfosSelected = { info ->
                 infos.name = info
                 currentStep = 3
-            }
+            },
+            onCancel = { currentStep = 1 }
         )
         3 -> SelectDate(
             onInfosSelected = { info ->
                 infos.date = info
                 currentStep = 4
-            }
+            },
+            onCancel = { currentStep = 1 }
         )
         4 -> SelectDepart(
             onInfosSelected = { info ->
                 infos.depart = info
                 currentStep = 5
             },
-            question = "Départ ?"
+            question = "Départ ?",
+            onCancel = { currentStep = 1 }
         )
         5 -> SelectDepart(
             onInfosSelected = { info ->
                 infos.destination = info
                 currentStep = 6
             },
-            question = "Destination ?"
+            question = "Destination ?",
+            onCancel = { currentStep = 1 }
         )
         6 -> SelectTrain(
             onInfosSelected = { info ->
                 infos.infosTrain = info
                 currentStep = 7
             },
-            informations = infos
+            informations = infos,
+            onCancel = { currentStep = 1 }
         )
         7 -> ResumInfos(
-            selectedTrain = infos.infosTrain
+            train = infos.infosTrain ?: error("Selected train is null"),
+            onCancel = { currentStep = 1 }
         )
+    }
+}
+
+@Composable
+fun CancelButton(onCancel: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        Button(
+            onClick = onCancel,
+            colors = ButtonDefaults.buttonColors(Color.Red)
+        ) {
+            Text(text = "Annuler", fontSize = 26.sp, color = Color.White)
+        }
     }
 }
 
@@ -154,6 +178,7 @@ fun Start(onNext: () -> Unit) {
 @Composable
 fun SelectPerson(
     onInfosSelected: (String) -> Unit,
+    onCancel: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -185,11 +210,13 @@ fun SelectPerson(
             Text(text = "Les deux", fontSize = 45.sp)
         }
     }
+    CancelButton(onCancel)
 }
 
 @Composable
 fun SelectDate(
     onInfosSelected: (String) -> Unit,
+    onCancel: () -> Unit
 ) {
     var date by remember { mutableStateOf("") }
     val calendar = Calendar.getInstance()
@@ -227,6 +254,7 @@ fun SelectDate(
                 )
         }
     }
+    CancelButton(onCancel)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -234,6 +262,7 @@ fun SelectDate(
 fun SelectDepart(
     onInfosSelected: (String) -> Unit,
     question: String,
+    onCancel: () -> Unit
 ) {
     var isClicked by remember { mutableStateOf(false) }
     var cityName by remember { mutableStateOf("") }
@@ -304,12 +333,14 @@ fun SelectDepart(
             }
         }
     }
+    CancelButton(onCancel)
 }
 
 @Composable
 fun SelectTrain(
     onInfosSelected: (Sections) -> Unit,
     informations: Infos,
+    onCancel: () -> Unit
 ) {
     val tokenAuth = "80ebf15b-8c29-4391-86f3-b936b4f1da22"
 
@@ -369,10 +400,11 @@ fun SelectTrain(
     showTrains(departureSections, isLoading) { selectedTrain ->
         onInfosSelected(selectedTrain)
     }
+    CancelButton(onCancel)
 }
 
 @Composable
-fun showTrains(departureTimes: List<Sections>, isLoading: Boolean, onItemSelected: (Sections) -> Unit): Sections {
+fun showTrains(departureTimes: List<Sections>, isLoading: Boolean, onItemSelected: (Sections) -> Unit): Sections? {
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -404,10 +436,9 @@ fun showTrains(departureTimes: List<Sections>, isLoading: Boolean, onItemSelecte
                 Button(onClick = {
                     onItemSelected(tmp)
                 }) {
-                    Text(text = "Départ : $departHour:$departMinute", fontSize = 26.sp)
-                    Text(text = "Arrivée : $arriveeHour:$arriveeMinute", fontSize = 26.sp)
+                    Text(text = "$departHour:$departMinute - $arriveeHour:$arriveeMinute", fontSize = 26.sp)
                 }
-                Spacer(modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.size(6.dp))
             }
 
             if (departureTimes.isEmpty()) {
@@ -417,7 +448,7 @@ fun showTrains(departureTimes: List<Sections>, isLoading: Boolean, onItemSelecte
             }
         }
     }
-    return departureTimes[0]
+    return null
 }
 
 fun recupInfos(informations: Infos): Infos {
@@ -455,7 +486,8 @@ interface SNCFService {
 }
 
 @Composable
-fun ResumInfos(selectedTrain: Sections) {
+fun ResumInfos(train: Sections,
+               onCancel: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -466,12 +498,12 @@ fun ResumInfos(selectedTrain: Sections) {
         Text(text = "Résumé des informations", fontSize = 36.sp)
         Spacer(modifier = Modifier.size(16.dp))
         //afficher le to, from, datedepart, datearrivee
-        val departHour = selectedTrain.departure_date_time.substring(9, 11)
-        val departMinute = selectedTrain.departure_date_time.substring(11, 13)
-        val arriveeHour = selectedTrain.arrival_date_time.substring(9, 11)
-        val arriveeMinute = selectedTrain.arrival_date_time.substring(11, 13)
-        Text(text="Départ depuis ${selectedTrain.from.name} à $departHour:$departMinute", fontSize = 26.sp)
-        Text(text="Arrivée à ${selectedTrain.to.name} à $arriveeHour:$arriveeMinute", fontSize = 26.sp)
+        val departHour = train.departure_date_time.substring(9, 11)
+        val departMinute = train.departure_date_time.substring(11, 13)
+        val arriveeHour = train.arrival_date_time.substring(9, 11)
+        val arriveeMinute = train.arrival_date_time.substring(11, 13)
+        Text(text="Départ depuis ${train.from.name} à $departHour:$departMinute", fontSize = 26.sp)
+        Text(text="Arrivée à ${train.to.name} à $arriveeHour:$arriveeMinute", fontSize = 26.sp)
         Spacer(modifier = Modifier.size(16.dp))
         Button(onClick = {
             //envoyer les infos à l'API
@@ -479,6 +511,7 @@ fun ResumInfos(selectedTrain: Sections) {
             Text(text = "Valider", fontSize = 36.sp)
         }
     }
+    CancelButton(onCancel)
 }
 
 @Preview(showBackground = true)
